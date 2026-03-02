@@ -82,16 +82,18 @@ def apply_theme(style_key, mode):
         </style>
     """, unsafe_allow_html=True)
 
-def gemini_call(prompt, model_id):
-    if not HAS_GENAI: return "Error: Google SDK missing."
-    if not st.session_state.user_api_key: return "Error: Missing API Key."
+def gemini_call(prompt, model_id, system_prompt_text):
+    # 假設您將 SKILL.md 讀取到 system_prompt_text 變數中
     try:
         genai.configure(api_key=st.session_state.user_api_key)
-        model = genai.GenerativeModel(MODELS[model_id])
+        # 針對 Gemini 1.5 系列，可以傳遞 system_instruction
+        model = genai.GenerativeModel(
+            model_name=MODELS[model_id],
+            system_instruction=system_prompt_text 
+        )
         return model.generate_content(prompt).text
     except Exception as e:
         return f"API Error: {str(e)}"
-
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("Swissmed Control")
