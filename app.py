@@ -1,17 +1,14 @@
 import os
-# Fix for Protobuf TypeError: Descriptors cannot be created directly
+# Redundancy check: set pure python protobuf implementation BEFORE importing Streamlit
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 import streamlit as st
 import yaml
-import json
 import time
-import requests
 from datetime import datetime
-import io
 import pandas as pd
 
-# Try importing Gemini SDK for the new AI features
+# Try importing Gemini SDK for the new AI features safely
 try:
     import google.generativeai as genai
     HAS_GENAI = True
@@ -21,19 +18,14 @@ except ImportError:
 # --- INITIALIZATION & CONFIG ---
 st.set_page_config(page_title="Swissmed Flower V4.0", layout="wide", initial_sidebar_state="expanded")
 
-# --- CUSTOM SIDEBAR HIDE BUTTON & STATE ---
-if 'sidebar_state' not in st.session_state:
-    st.session_state.sidebar_state = "expanded"
-
 # --- API KEY HANDLING (HF Spaces Compatible) ---
-# Safely fetch from Hugging Face Secrets / Environment Variables
 ENV_API_KEY = os.environ.get("GEMINI_API_KEY", "") 
 if 'user_api_key' not in st.session_state:
     st.session_state.user_api_key = ENV_API_KEY
 
 MODELS = {
     "Gemini 2.5 Flash": "gemini-2.5-flash",
-    "Gemini 3 Flash Preview": "gemini-3-flash-preview" # Fallbacks handled by SDK
+    "Gemini 3 Flash Preview": "gemini-3-flash-preview"
 }
 
 # --- ARTISTIC THEMES (20 Styles) ---
@@ -71,7 +63,6 @@ I18N = {
         "btn_run": "Execute Pipeline",
         "btn_std": "Standardize YAML",
         "upload_doc": "Upload 510(k) Submission",
-        "prompt": "Reviewer Context Override",
         "mana": "Agent Mana & Telemetry",
         "report_header": "Interactive Report Editor",
         "heatmap": "Phase Coverage Heatmap"
@@ -85,7 +76,6 @@ I18N = {
         "btn_run": "執行全線流程",
         "btn_std": "標準化 YAML",
         "upload_doc": "上傳 510(k) 提交材料",
-        "prompt": "審查背景重寫",
         "mana": "代理人能量與遙測",
         "report_header": "交互式報告編輯器",
         "heatmap": "階段覆蓋熱圖"
@@ -104,8 +94,7 @@ if 'agents_yaml' not in st.session_state:
                 {"id": "software", "agent": "軟體關切程度分析師", "icon": "💻", "task": "Software LOC verification.", "status": "Ready", "phase": "Technical"},
                 {"id": "cyber", "agent": "網絡安全審計員", "icon": "🛡️", "task": "SBOM & vulnerability review.", "status": "Ready", "phase": "Technical"},
                 {"id": "se", "agent": "技術特徵比較員", "icon": "🌻", "task": "Predicate comparison.", "status": "Ready", "phase": "Substantive"},
-                {"id": "clinical", "agent": "臨床數據評估員", "icon": "🏥", "task": "Statistical significance audit.", "status": "Ready", "phase": "Clinical"},
-                {"id": "aggregator", "agent": "缺陷彙整專家", "icon": "📝", "task": "Compile final findings.", "status": "Ready", "phase": "Finalization"}
+                {"id": "clinical", "agent": "臨床數據評估員", "icon": "🏥", "task": "Statistical significance audit.", "status": "Ready", "phase": "Clinical"}
             ]
         }
     }
@@ -125,18 +114,12 @@ def apply_theme(style_key, mode):
         <style>
         .stApp {{ background-color: {bg}; color: {txt}; font-family: {cfg['font']}; }}
         .agent-card {{
-            background: rgba(255, 255, 255, 0.05);
-            border-left: 5px solid {cfg['accent']};
-            padding: 15px; border-radius: 10px; margin-bottom: 10px;
-            transition: transform 0.2s;
+            background: rgba(255, 255, 255, 0.05); border-left: 5px solid {cfg['accent']};
+            padding: 15px; border-radius: 10px; margin-bottom: 10px; transition: transform 0.2s;
         }}
         .agent-card:hover {{ transform: scale(1.02); background: rgba(255, 255, 255, 0.1); }}
-        .status-pill {{
-            font-size: 0.8em; padding: 2px 8px; border-radius: 10px; background: {cfg['accent']}; color: {bg};
-        }}
-        [data-testid="stSidebar"][aria-expanded="false"] {{
-            display: none;
-        }}
+        .status-pill {{ font-size: 0.8em; padding: 2px 8px; border-radius: 10px; background: {cfg['accent']}; color: {bg}; }}
+        [data-testid="stSidebar"][aria-expanded="false"] {{ display: none; }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -152,19 +135,20 @@ def standardize_yaml(text):
         st.error(f"YAML Syntax Error: {e}")
         return None
 
-def gemini_call(prompt):
-    if not HAS_GENAI:
-        return "Error: `google-generativeai` library is not installed in the Hugging Face environment."
-    if not st.session_state.user_api_key:
-        return "Error: Please provide a Gemini API Key in the sidebar."
+def gemini_call(prompt, model_id):
+    if not HAS_GENAI: return "Error: google-generativeai library is missing."
+    if not st.session_state.user_api_key: return "Error: Please provide a Gemini API Key in the sidebar."
     try:
         genai.configure(api_key=st.session_state.user_api_key)
-        # Fallback to standard gemini-1.5-flash if the requested model preview isn't available
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        return response.text
+        model = genai.GenerativeModel(MODELS[model_id])
+        return model.generate_content(prompt).text
     except Exception as e:
-        return f"API Error: {str(e)}"
+        # Graceful fallback if preview model is invalid/revoked
+        try:
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            return model.generate_content(prompt).text
+        except Exception as fallback_e:
+            return f"API Error: {str(fallback_e)}"
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -179,7 +163,6 @@ with st.sidebar:
         st.warning("Please provide an API key to enable AI features.")
 
     st.divider()
-    
     sel_lang = st.selectbox("Language / 語言", ["English", "Traditional Chinese"])
     t = I18N[sel_lang]
     
@@ -190,7 +173,6 @@ with st.sidebar:
     st.divider()
     st.subheader(f"💧 {t['mana']}")
     st.progress(st.session_state.mana / 100)
-    st.caption("Consumption: 2.5💧 per Agent")
     
     st.subheader("🛠️ Intelligence Core")
     target_model = st.selectbox("LLM Primary", list(MODELS.keys()))
@@ -202,14 +184,8 @@ with st.sidebar:
         st.session_state.report_md = "# System Reset"
         st.rerun()
 
-# --- HEADER WITH SIDEBAR TOGGLE ---
-col_title, col_toggle = st.columns([0.9, 0.1])
-with col_title:
-    st.title(t["title"])
-with col_toggle:
-    if st.button("👁️ Sidebar"):
-        pass
-
+# --- HEADER ---
+st.title(t["title"])
 tab_dash, tab_rev, tab_mg, tab_au = st.tabs([t["tab_dash"], t["tab_review"], t["tab_mgmt"], t["tab_logs"]])
 
 # --- TAB: DASHBOARD ---
@@ -234,9 +210,8 @@ with tab_dash:
     st.subheader("System Telemetry")
     met_c1, met_c2, met_c3, met_c4 = st.columns(4)
     met_c1.metric("Active Agents", len(stages), "+2 New")
-    met_c2.metric("Avg Latency", "1.4s", "-0.2s")
-    met_c3.metric("Regulatory Coverage", f"{min(100, len(st.session_state.garden)*12)}%", "Target: 100%")
-    met_c4.metric("Resource Drain", f"{100 - st.session_state.mana}%", "Current Peak")
+    met_c2.metric("Regulatory Coverage", f"{min(100, len(st.session_state.garden)*15)}%", "Target: 100%")
+    met_c3.metric("Resource Drain", f"{100 - st.session_state.mana}%", "Current Peak")
 
 # --- TAB: LIVE REVIEW ---
 with tab_rev:
@@ -246,12 +221,12 @@ with tab_rev:
         st.subheader(t["upload_doc"])
         file = st.file_uploader("Upload 510(k) PDF/XML", type=["pdf", "txt", "xml"])
         
-        # --- NEW AI FEATURE 1: Document Risk Pre-Assessor ---
+        # --- AI FEATURE 1: Document Risk Pre-Assessor ---
         if file and st.session_state.user_api_key:
             if st.button("🔮 Run AI Risk Pre-Assessment", icon="✨"):
                 with st.spinner("AI is analyzing document metadata..."):
                     prompt = f"Act as an FDA 510(k) initial reviewer. Based on a submitted file named '{file.name}', generate a fast 3-bullet point preliminary risk & compliance checklist for the review team."
-                    ai_assessment = gemini_call(prompt)
+                    ai_assessment = gemini_call(prompt, target_model)
                     st.info(f"**AI Preliminary Assessment:**\n\n{ai_assessment}")
         
         st.markdown(f"<br>**{t['heatmap']}**", unsafe_allow_html=True)
@@ -270,47 +245,39 @@ with tab_rev:
                 selected_agents.append(s)
         
         if st.button("🚀 " + t["btn_run"], use_container_width=True):
-            if not file:
-                st.warning("Please upload submission materials.")
-            elif not st.session_state.user_api_key:
-                st.error("API Key is missing. Please set it in the sidebar.")
+            if not file: st.warning("Please upload submission materials.")
+            elif not st.session_state.user_api_key: st.error("API Key is missing.")
             else:
                 with st.status("Orchestrating Pipeline...", expanded=True) as status:
                     for s in selected_agents:
                         st.write(f"Agent {s['agent']} executing specialized logic...")
-                        time.sleep(0.5) # Simulation
-                        st.session_state.garden.append(s['icon'])
+                        time.sleep(0.5)
+                        if s['icon'] not in st.session_state.garden: st.session_state.garden.append(s['icon'])
                         st.session_state.active_indices[s['phase']] = 1
                         st.session_state.audit_trail.append({
                             "Timestamp": datetime.now().strftime("%H:%M:%S"),
-                            "Agent": s['agent'],
-                            "Action": "Document Audit",
-                            "Model": target_model
+                            "Agent": s['agent'], "Phase": s['phase'], "Model": target_model
                         })
-                    
                     st.session_state.mana = max(0, st.session_state.mana - (len(selected_agents) * 2.5))
                     st.session_state.report_md = f"# Preliminary Review: {file.name}\n\n## Summary\nSuccessfully analyzed {len(selected_agents)} regulatory domains.\n\n## Findings\n- **Safety**: Compliant\n- **Performance**: Validated\n\n*Generated by Swissmed V4.0*"
                     status.update(label="Analysis Complete!", state="complete")
-                # Intentionally avoiding st.rerun() here to prevent wiping out the status UI and file state
 
     with c2:
         st.subheader(t["report_header"])
-        # Properly bound state to Streamlit Key
         st.text_area("Live Report Editor", value=st.session_state.report_md, height=500, key="report_editor_box")
-        st.divider()
         st.download_button("Export Report", st.session_state.get("report_editor_box", st.session_state.report_md), "Swissmed_Report.md")
 
 # --- TAB: MANAGEMENT (Agent Hub) ---
 with tab_mg:
     st.subheader("Dynamic YAML Orchestration")
     
-    # --- NEW AI FEATURE 2: Configuration Optimizer ---
+    # --- AI FEATURE 2: Configuration Optimizer ---
     if st.session_state.user_api_key:
         if st.button("✨ AI Optimize YAML Configuration", use_container_width=True):
             with st.spinner("AI is analyzing your agent structure..."):
                 current_yaml = yaml.dump(st.session_state.agents_yaml, sort_keys=False)
                 prompt = f"Here is my current AI agent YAML config for medical device regulatory review:\n{current_yaml}\n\nPlease suggest 2 missing regulatory review phases or agents I should add to ensure complete FDA 510(k) coverage. Respond concisely."
-                ai_suggestions = gemini_call(prompt)
+                ai_suggestions = gemini_call(prompt, target_model)
                 st.success(f"**AI Recommendations:**\n\n{ai_suggestions}")
 
     col_e1, col_e2 = st.columns([2, 1])
@@ -324,7 +291,6 @@ with tab_mg:
                 st.success("Pipeline refreshed successfully.")
                 st.rerun()
     with col_e2:
-        st.info("The configuration drives the Dashboard and Live Review tabs. Ensure every agent has a 'phase' assigned.")
         up_file = st.file_uploader("Upload agents.yaml", type=["yaml", "yml"])
         if up_file:
             st.session_state.agents_yaml = standardize_yaml(up_file.read().decode())
@@ -338,9 +304,8 @@ with tab_au:
     else:
         st.write("No agent activity logs available.")
 
-# Footer Garden
 if st.session_state.garden:
     st.divider()
     st.markdown(f"### 🌸 Achievement Blossoms: {' '.join(st.session_state.garden)}")
 
-st.caption("Swissmed Flower V4.0 | Regulatory AI Environment | Powered by Gemini")
+st.caption("Swissmed Flower V4.0 | Regulatory AI Environment")
