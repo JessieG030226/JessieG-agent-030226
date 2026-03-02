@@ -81,7 +81,33 @@ def apply_theme(style_key, mode):
         .status-pill {{ font-size: 0.8em; padding: 2px 8px; border-radius: 10px; background: {cfg['accent']}; color: {bg}; }}
         </style>
     """, unsafe_allow_html=True)
-
+def gemini_call(prompt, model_id, skill_file_path="SKILL.md"):
+    if not HAS_GENAI: return "Error: Google SDK missing."
+    if not st.session_state.user_api_key: return "Error: Missing API Key."
+    """
+    Reads system instructions from a markdown file and calls the Gemini API.
+    """
+    # 1. Read the SKILL.md file
+    try:
+        if os.path.exists(skill_file_path):
+            with open(skill_file_path, "r", encoding="utf-8") as f:
+                system_prompt_text = f.read()
+        else:
+            return f"Error: {skill_file_path} not found."
+            
+    except Exception as e:
+        return f"File Read Error: {str(e)}"
+    try:
+        genai.configure(api_key=st.session_state.user_api_key)
+        # 針對 Gemini 1.5 系列，可以傳遞 system_instruction
+        model = genai.GenerativeModel(
+            model_name=MODELS[model_id],
+            system_instruction=system_prompt_text 
+        )
+        return model.generate_content(prompt).text
+    except Exception as e:
+        return f"API Error: {str(e)}"
+        
 def gemini_call(prompt, model_id):
     if not HAS_GENAI: return "Error: Google SDK missing."
     if not st.session_state.user_api_key: return "Error: Missing API Key."
