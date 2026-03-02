@@ -11,6 +11,13 @@ from datetime import datetime
 import io
 import pandas as pd
 
+# Try importing Gemini SDK for the new AI features
+try:
+    import google.generativeai as genai
+    HAS_GENAI = True
+except ImportError:
+    HAS_GENAI = False
+
 # --- INITIALIZATION & CONFIG ---
 st.set_page_config(page_title="Swissmed Flower V4.0", layout="wide", initial_sidebar_state="expanded")
 
@@ -18,15 +25,15 @@ st.set_page_config(page_title="Swissmed Flower V4.0", layout="wide", initial_sid
 if 'sidebar_state' not in st.session_state:
     st.session_state.sidebar_state = "expanded"
 
-# --- API KEY HANDLING ---
-# Environment provides key, but we allow user override if empty
-ENV_API_KEY = "" # Handled by the execution environment
+# --- API KEY HANDLING (HF Spaces Compatible) ---
+# Safely fetch from Hugging Face Secrets / Environment Variables
+ENV_API_KEY = os.environ.get("GEMINI_API_KEY", "") 
 if 'user_api_key' not in st.session_state:
     st.session_state.user_api_key = ENV_API_KEY
 
 MODELS = {
-    "Gemini 2.5 Flash": "gemini-2.5-flash-preview-09-2025",
-    "Gemini 3 Flash Preview": "gemini-3-flash-preview"
+    "Gemini 2.5 Flash": "gemini-2.5-flash",
+    "Gemini 3 Flash Preview": "gemini-3-flash-preview" # Fallbacks handled by SDK
 }
 
 # --- ARTISTIC THEMES (20 Styles) ---
@@ -127,7 +134,6 @@ def apply_theme(style_key, mode):
         .status-pill {{
             font-size: 0.8em; padding: 2px 8px; border-radius: 10px; background: {cfg['accent']}; color: {bg};
         }}
-        /* Hide sidebar override if needed */
         [data-testid="stSidebar"][aria-expanded="false"] {{
             display: none;
         }}
@@ -146,18 +152,31 @@ def standardize_yaml(text):
         st.error(f"YAML Syntax Error: {e}")
         return None
 
+def gemini_call(prompt):
+    if not HAS_GENAI:
+        return "Error: `google-generativeai` library is not installed in the Hugging Face environment."
+    if not st.session_state.user_api_key:
+        return "Error: Please provide a Gemini API Key in the sidebar."
+    try:
+        genai.configure(api_key=st.session_state.user_api_key)
+        # Fallback to standard gemini-1.5-flash if the requested model preview isn't available
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"API Error: {str(e)}"
+
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("Swissmed Control")
     
-    # API Key Input
     st.subheader("🔑 Authentication")
     current_key = st.text_input("Gemini API Key", value=st.session_state.user_api_key, type="password")
     if current_key:
         st.session_state.user_api_key = current_key
     
     if not st.session_state.user_api_key:
-        st.warning("Please provide an API key to proceed.")
+        st.warning("Please provide an API key to enable AI features.")
 
     st.divider()
     
@@ -188,18 +207,14 @@ col_title, col_toggle = st.columns([0.9, 0.1])
 with col_title:
     st.title(t["title"])
 with col_toggle:
-    # Small button to act as a sidebar toggle (since streamlit default is top left, this is a redundant/accessible helper)
     if st.button("👁️ Sidebar"):
-        # We trigger streamlit's built-in sidebar behavior or just a layout refresh
         pass
 
 tab_dash, tab_rev, tab_mg, tab_au = st.tabs([t["tab_dash"], t["tab_review"], t["tab_mgmt"], t["tab_logs"]])
 
-# --- TAB: DASHBOARD (Visual Feature 1) ---
+# --- TAB: DASHBOARD ---
 with tab_dash:
     st.subheader("Pipeline Health & Real-time Orchestration")
-    
-    # Grid of status cards
     stages = st.session_state.agents_yaml["pipeline"]["stages"]
     cols = st.columns(4)
     for idx, s in enumerate(stages):
@@ -215,7 +230,6 @@ with tab_dash:
             </div>
             """, unsafe_allow_html=True)
     
-    # Telemetry Analytics (Visual Feature 2)
     st.divider()
     st.subheader("System Telemetry")
     met_c1, met_c2, met_c3, met_c4 = st.columns(4)
@@ -232,13 +246,20 @@ with tab_rev:
         st.subheader(t["upload_doc"])
         file = st.file_uploader("Upload 510(k) PDF/XML", type=["pdf", "txt", "xml"])
         
-        # Heatmap Indicator (Visual Feature 3)
-        st.markdown(f"**{t['heatmap']}**")
+        # --- NEW AI FEATURE 1: Document Risk Pre-Assessor ---
+        if file and st.session_state.user_api_key:
+            if st.button("🔮 Run AI Risk Pre-Assessment", icon="✨"):
+                with st.spinner("AI is analyzing document metadata..."):
+                    prompt = f"Act as an FDA 510(k) initial reviewer. Based on a submitted file named '{file.name}', generate a fast 3-bullet point preliminary risk & compliance checklist for the review team."
+                    ai_assessment = gemini_call(prompt)
+                    st.info(f"**AI Preliminary Assessment:**\n\n{ai_assessment}")
+        
+        st.markdown(f"<br>**{t['heatmap']}**", unsafe_allow_html=True)
         phases = ["Admin", "RTA", "Technical", "Substantive", "Clinical"]
         h_cols = st.columns(5)
         for i, p in enumerate(phases):
             is_done = st.session_state.active_indices.get(p, 0) > 0
-            color = "#4CAF50" if is_done else "#555"
+            color = THEMES[sel_style]['accent'] if is_done else "#555555"
             h_cols[i].markdown(f"<div style='background:{color}; height:10px; border-radius:5px;'></div><center><small>{p}</small></center>", unsafe_allow_html=True)
         
         st.divider()
@@ -257,32 +278,41 @@ with tab_rev:
                 with st.status("Orchestrating Pipeline...", expanded=True) as status:
                     for s in selected_agents:
                         st.write(f"Agent {s['agent']} executing specialized logic...")
-                        time.sleep(1) # Simulation
+                        time.sleep(0.5) # Simulation
                         st.session_state.garden.append(s['icon'])
                         st.session_state.active_indices[s['phase']] = 1
                         st.session_state.audit_trail.append({
                             "Timestamp": datetime.now().strftime("%H:%M:%S"),
                             "Agent": s['agent'],
                             "Action": "Document Audit",
-                            "Model": MODELS[target_model]
+                            "Model": target_model
                         })
+                    
                     st.session_state.mana = max(0, st.session_state.mana - (len(selected_agents) * 2.5))
                     st.session_state.report_md = f"# Preliminary Review: {file.name}\n\n## Summary\nSuccessfully analyzed {len(selected_agents)} regulatory domains.\n\n## Findings\n- **Safety**: Compliant\n- **Performance**: Validated\n\n*Generated by Swissmed V4.0*"
-                    status.update(label="Analysis Complete", state="complete")
-                    st.rerun()
+                    status.update(label="Analysis Complete!", state="complete")
+                # Intentionally avoiding st.rerun() here to prevent wiping out the status UI and file state
 
     with c2:
         st.subheader(t["report_header"])
-        report_txt = st.text_area("Live Report Editor", value=st.session_state.report_md, height=500)
-        st.session_state.report_md = report_txt
+        # Properly bound state to Streamlit Key
+        st.text_area("Live Report Editor", value=st.session_state.report_md, height=500, key="report_editor_box")
         st.divider()
-        st.markdown("### Report Preview")
-        st.markdown(report_txt)
-        st.download_button("Export Report", report_txt, "Swissmed_Report.md")
+        st.download_button("Export Report", st.session_state.get("report_editor_box", st.session_state.report_md), "Swissmed_Report.md")
 
-# --- TAB: MANAGEMENT ---
+# --- TAB: MANAGEMENT (Agent Hub) ---
 with tab_mg:
     st.subheader("Dynamic YAML Orchestration")
+    
+    # --- NEW AI FEATURE 2: Configuration Optimizer ---
+    if st.session_state.user_api_key:
+        if st.button("✨ AI Optimize YAML Configuration", use_container_width=True):
+            with st.spinner("AI is analyzing your agent structure..."):
+                current_yaml = yaml.dump(st.session_state.agents_yaml, sort_keys=False)
+                prompt = f"Here is my current AI agent YAML config for medical device regulatory review:\n{current_yaml}\n\nPlease suggest 2 missing regulatory review phases or agents I should add to ensure complete FDA 510(k) coverage. Respond concisely."
+                ai_suggestions = gemini_call(prompt)
+                st.success(f"**AI Recommendations:**\n\n{ai_suggestions}")
+
     col_e1, col_e2 = st.columns([2, 1])
     with col_e1:
         yaml_content = yaml.dump(st.session_state.agents_yaml, allow_unicode=True, sort_keys=False)
