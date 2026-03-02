@@ -18,3 +18,4 @@ xai_sdk
 pdf2image
 requests
 pydantic
+protobuf
