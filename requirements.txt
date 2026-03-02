@@ -1,5 +1,12 @@
-streamlit>=1.40.0
-google-generativeai>=0.8.0
-pandas>=2.0.0
+streamlit>=1.36.0
 pyyaml>=6.0.1
-requests>=2.31.0
+pandas>=2.2.2
+# LLM providers
+google-generativeai>=0.7.2
+openai>=1.40.0
+anthropic>=0.34.2
+# PDF extraction / rendering for OCR workflows
+PyMuPDF>=1.24.9
+# Image + OCR (Python-side OCR)
+Pillow>=10.4.0
+pytesseract>=0.3.10
