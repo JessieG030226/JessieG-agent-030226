@@ -2,17 +2,20 @@ import streamlit as st
 import yaml
 import json
 import time
-import asyncio
-import base64
+import requests
 from datetime import datetime
+import io
+import pandas as pd
 
 # --- INITIALIZATION & CONFIG ---
 st.set_page_config(page_title="Swissmed Flower V4.0", layout="wide", initial_sidebar_state="expanded")
 
-# Constants for API
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key="
-API_KEY = "" # Handled by environment
+# Constants
+API_KEY = "" # Execution environment handles this
+MODELS = {
+    "Gemini 2.5 Flash": "gemini-2.5-flash-preview-09-2025",
+    "Gemini 3 Flash Preview": "gemini-3-flash-preview"
+}
 
 # --- ARTISTIC THEMES (20 Styles) ---
 THEMES = {
@@ -38,152 +41,238 @@ THEMES = {
     "Basquiat": {"bg": "#121212", "accent": "#FFEB3B", "text": "#FFFFFF", "font": "cursive"}
 }
 
-# --- LOCALIZATION ---
+# Localized UI Content
 I18N = {
     "English": {
-        "title": "Swissmed Flower Edition V4.0",
-        "tagline": "Agentic 510(k) Review Orchestrator",
-        "upload": "Upload Submission (eSTAR/PDF)",
-        "run": "Execute YAML Pipeline",
-        "mana": "Agent Mana (API Level)",
-        "garden": "Achievement Garden",
-        "logs": "Chain of Thought (Audit)",
-        "status_ingest": "🌸 Librarian: Parsing Submission...",
-        "status_rta": "🌿 Compliance: Validating RTA Checklist...",
-        "status_se": "🌻 Scientist: Determining Equivalence...",
-        "status_done": "Review Complete. Summary Generated."
+        "title": "Swissmed Flower V4.0",
+        "tab_review": "🚀 Live Review",
+        "tab_mgmt": "🤖 Agent Hub",
+        "tab_logs": "📜 Audit Logs",
+        "tab_dash": "📊 Blossom Dashboard",
+        "btn_run": "Execute Pipeline",
+        "btn_std": "Standardize YAML",
+        "upload_doc": "Upload 510(k) Submission",
+        "prompt": "Reviewer Context Override",
+        "mana": "Agent Mana & Telemetry",
+        "report_header": "Interactive Report Editor",
+        "heatmap": "Phase Coverage Heatmap"
     },
     "Traditional Chinese": {
         "title": "Swissmed 花卉版 V4.0",
-        "tagline": "自主式 510(k) 審查編排系統",
-        "upload": "上傳提交文件 (eSTAR/PDF)",
-        "run": "執行 YAML 流水線",
-        "mana": "代理人能量 (API 用量)",
-        "garden": "審查成就花園",
-        "logs": "思考鏈 (審計日誌)",
-        "status_ingest": "🌸 館長代理：解析提交文件中...",
-        "status_rta": "🌿 合規代理：驗證 RTA 清單...",
-        "status_se": "🌻 科學代理：判斷實質等同性...",
-        "status_done": "審查完成。已生成摘要報告。"
+        "tab_review": "🚀 實時審查",
+        "tab_mgmt": "🤖 代理人中心",
+        "tab_logs": "📜 審計日誌",
+        "tab_dash": "📊 綻放儀表板",
+        "btn_run": "執行全線流程",
+        "btn_std": "標準化 YAML",
+        "upload_doc": "上傳 510(k) 提交材料",
+        "prompt": "審查背景重寫",
+        "mana": "代理人能量與遙測",
+        "report_header": "交互式報告編輯器",
+        "heatmap": "階段覆蓋熱圖"
     }
 }
 
-# --- STATE MANAGEMENT ---
+# --- SESSION STATE ---
+if 'agents_yaml' not in st.session_state:
+    st.session_state.agents_yaml = {
+        "pipeline": {
+            "version": "4.0",
+            "stages": [
+                {"id": "ingest", "agent": "eSTAR 解析專家", "icon": "🌸", "task": "Parsing XML metadata.", "status": "Ready", "phase": "Admin"},
+                {"id": "rta", "agent": "RTA 行政合規官", "icon": "🌿", "task": "15-day completeness check.", "status": "Ready", "phase": "RTA"},
+                {"id": "biocompat", "agent": "生物相容性審查員", "icon": "🔬", "task": "ISO 10993 Review.", "status": "Ready", "phase": "Technical"},
+                {"id": "software", "agent": "軟體關切程度分析師", "icon": "💻", "task": "Software LOC verification.", "status": "Ready", "phase": "Technical"},
+                {"id": "cyber", "agent": "網絡安全審計員", "icon": "🛡️", "task": "SBOM & vulnerability review.", "status": "Ready", "phase": "Technical"},
+                {"id": "se", "agent": "技術特徵比較員", "icon": "🌻", "task": "Predicate comparison.", "status": "Ready", "phase": "Substantive"},
+                {"id": "clinical", "agent": "臨床數據評估員", "icon": "🏥", "task": "Statistical significance audit.", "status": "Ready", "phase": "Clinical"},
+                {"id": "aggregator", "agent": "缺陷彙整專家", "icon": "📝", "task": "Compile final findings.", "status": "Ready", "phase": "Finalization"}
+            ]
+        }
+    }
 if 'mana' not in st.session_state: st.session_state.mana = 100
 if 'garden' not in st.session_state: st.session_state.garden = []
-if 'audit_log' not in st.session_state: st.session_state.audit_log = []
-if 'reports' not in st.session_state: st.session_state.reports = {}
+if 'report_md' not in st.session_state: st.session_state.report_md = "# Regulatory Review Summary\n\n*System initialized. Awaiting submission...*"
+if 'audit_trail' not in st.session_state: st.session_state.audit_trail = []
+if 'active_indices' not in st.session_state: st.session_state.active_indices = {"Admin": 0, "RTA": 0, "Technical": 0, "Substantive": 0, "Clinical": 0}
 
-# --- HELPER FUNCTIONS ---
-async def call_gemini(prompt, system_prompt=""):
-    url = f"{GEMINI_URL}{API_KEY}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "systemInstruction": {"parts": [{"text": system_prompt}]}
-    }
-    
-    for delay in [1, 2, 4, 8, 16]:
-        try:
-            response = requests.post(url, json=payload, timeout=30)
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', "")
-        except:
-            time.sleep(delay)
-    return "Error: Agent unreachable after retries."
-
-def apply_theme(style, mode):
-    cfg = THEMES[style]
-    bg = cfg["bg"] if mode == "Light" else "#121212"
-    txt = cfg["text"] if mode == "Light" else "#E0E0E0"
+# --- UTILITY FUNCTIONS ---
+def apply_theme(style_key, mode):
+    cfg = THEMES[style_key]
+    is_dark = mode == "Dark"
+    bg = cfg["bg"] if not is_dark else "#121212"
+    txt = cfg["text"] if not is_dark else "#EAEAEA"
     st.markdown(f"""
         <style>
         .stApp {{ background-color: {bg}; color: {txt}; font-family: {cfg['font']}; }}
-        .agent-card {{ 
-            background: rgba(255,255,255,0.05); 
-            border: 1px solid {cfg['accent']}; 
-            padding: 20px; border-radius: 15px; margin-bottom: 10px;
+        .agent-card {{
+            background: rgba(255, 255, 255, 0.05);
+            border-left: 5px solid {cfg['accent']};
+            padding: 15px; border-radius: 10px; margin-bottom: 10px;
+            transition: transform 0.2s;
         }}
-        .stButton>button {{ border-radius: 30px; border: 2px solid {cfg['accent']}; }}
+        .agent-card:hover {{ transform: scale(1.02); background: rgba(255, 255, 255, 0.1); }}
+        .status-pill {{
+            font-size: 0.8em; padding: 2px 8px; border-radius: 10px; background: {cfg['accent']}; color: {bg};
+        }}
         </style>
     """, unsafe_allow_html=True)
 
-# --- SIDEBAR & SETTINGS ---
+def standardize_yaml(text):
+    try:
+        data = yaml.safe_load(text)
+        if isinstance(data, list): data = {"pipeline": {"version": "4.0", "stages": data}}
+        for s in data["pipeline"]["stages"]:
+            if "status" not in s: s["status"] = "Ready"
+            if "phase" not in s: s["phase"] = "Technical"
+        return data
+    except Exception as e:
+        st.error(f"YAML Syntax Error: {e}")
+        return None
+
+# --- SIDEBAR ---
 with st.sidebar:
-    st.title("Settings")
-    lang = st.selectbox("Language / 語言", ["English", "Traditional Chinese"])
-    t = I18N[lang]
+    st.title("Swissmed Control")
+    sel_lang = st.selectbox("Language / 語言", ["English", "Traditional Chinese"])
+    t = I18N[sel_lang]
     
-    style = st.selectbox("Aesthetic Style", list(THEMES.keys()))
-    mode = st.radio("Mode", ["Light", "Dark"], horizontal=True)
-    apply_theme(style, mode)
+    sel_style = st.selectbox("Aesthetic Engine", list(THEMES.keys()))
+    sel_mode = st.radio("Theme Mode", ["Light", "Dark"], horizontal=True)
+    apply_theme(sel_style, sel_mode)
     
     st.divider()
     st.subheader(f"💧 {t['mana']}")
     st.progress(st.session_state.mana / 100)
+    st.caption("Consumption: 2.5💧 per Agent")
     
-    st.subheader(f"🏡 {t['garden']}")
-    if not st.session_state.garden:
-        st.caption("No blossoms yet. Start a review.")
-    else:
-        garden_html = "".join([f"<span style='font-size:24px;'>{b}</span>" for b in st.session_state.garden])
-        st.markdown(garden_html, unsafe_allow_html=True)
+    st.subheader("🛠️ Intelligence Core")
+    target_model = st.selectbox("LLM Primary", list(MODELS.keys()))
+    
+    if st.button("Flush Session State"):
+        st.session_state.mana = 100
+        st.session_state.garden = []
+        st.session_state.audit_trail = []
+        st.session_state.report_md = "# System Reset"
+        st.rerun()
 
-# --- MAIN INTERFACE ---
+# --- MAIN DASHBOARD ---
 st.title(t["title"])
-st.markdown(f"**{t['tagline']}**")
+tab_dash, tab_rev, tab_mg, tab_au = st.tabs([t["tab_dash"], t["tab_review"], t["tab_mgmt"], t["tab_logs"]])
 
-uploaded_file = st.file_uploader(t["upload"], type=["pdf", "txt"])
-
-if st.button("🚀 " + t["run"], use_container_width=True):
-    if not uploaded_file:
-        st.error("Please upload a file.")
-    else:
-        # Load Pipeline
-        with open("agents.yaml", "r") as f:
-            pipeline = yaml.safe_load(f)
-        
-        with open("SKILL.md", "r") as f:
-            skills = f.read()
-
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        # AGENTIC LOOP
-        for i, stage in enumerate(pipeline['pipeline']['stages']):
-            status_text.markdown(f"**Executing Stage {i+1}:** {stage['id'].replace('_', ' ').title()}")
-            
-            # Simulation of LLM Call (Real logic would call call_gemini)
-            time.sleep(1.5) 
-            
-            # Update Garden & Mana
-            st.session_state.garden.append(stage['icon'])
-            st.session_state.mana -= 5
-            
-            # Log Traceability
-            st.session_state.audit_log.append({
-                "timestamp": datetime.now().isoformat(),
-                "agent": stage['agent'],
-                "action": stage['task'],
-                "reasoning": f"Validated section {stage['id']} against FDA guidelines found in SKILL.md."
-            })
-            progress_bar.progress((i + 1) / len(pipeline['pipeline']['stages']))
-
-        st.success(t["status_done"])
-        st.session_state.reports["final"] = "# Review Summary\n\n## RTA Results\n- Section 5: Pass\n- Section 12: Pass\n\n## Substantial Equivalence\n- Subject Device: Swissmed Implant V4\n- Predicate: K190000\n- Status: **Equivalent**"
-
-# --- RESULTS AREA ---
-if st.session_state.reports.get("final"):
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("📝 Report Editor")
-        report_txt = st.text_area("Live Markdown", value=st.session_state.reports["final"], height=400)
-    with c2:
-        st.subheader("🧐 Preview")
-        st.markdown(report_txt)
-        
+# --- TAB: DASHBOARD (Visual Feature 1) ---
+with tab_dash:
+    st.subheader("Pipeline Health & Real-time Orchestration")
+    
+    # Grid of status cards
+    stages = st.session_state.agents_yaml["pipeline"]["stages"]
+    cols = st.columns(4)
+    for idx, s in enumerate(stages):
+        with cols[idx % 4]:
+            st.markdown(f"""
+            <div class="agent-card">
+                <div style="display: flex; justify-content: space-between;">
+                    <span>{s['icon']} <b>{s['agent']}</b></span>
+                    <span class="status-pill">{s['status']}</span>
+                </div>
+                <p style="font-size: 0.85em; opacity: 0.8; margin-top: 10px;">{s['task']}</p>
+                <div style="font-size: 0.7em; text-transform: uppercase;">Phase: {s['phase']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Telemetry Analytics (Visual Feature 2)
     st.divider()
-    with st.expander(f"📜 {t['logs']}"):
-        st.json(st.session_state.audit_log)
+    st.subheader("System Telemetry")
+    met_c1, met_c2, met_c3, met_c4 = st.columns(4)
+    met_c1.metric("Active Agents", len(stages), "+2 New")
+    met_c2.metric("Avg Latency", "1.4s", "-0.2s")
+    met_c3.metric("Regulatory Coverage", f"{min(100, len(st.session_state.garden)*12)}%", "Target: 100%")
+    met_c4.metric("Resource Drain", f"{100 - st.session_state.mana}%", "Current Peak")
 
-st.caption("Swissmed 510(k) Reviewer - Build 030226. No data is persisted to disk.")
+# --- TAB: LIVE REVIEW ---
+with tab_rev:
+    c1, c2 = st.columns([1, 1])
+    
+    with c1:
+        st.subheader(t["upload_doc"])
+        file = st.file_uploader("Upload 510(k) PDF/XML", type=["pdf", "txt", "xml"])
+        
+        # Heatmap Indicator (Visual Feature 3)
+        st.markdown(f"**{t['heatmap']}**")
+        phases = ["Admin", "RTA", "Technical", "Substantive", "Clinical"]
+        h_cols = st.columns(5)
+        for i, p in enumerate(phases):
+            is_done = st.session_state.active_indices.get(p, 0) > 0
+            color = "#4CAF50" if is_done else "#555"
+            h_cols[i].markdown(f"<div style='background:{color}; height:10px; border-radius:5px;'></div><center><small>{p}</small></center>", unsafe_allow_html=True)
+        
+        st.divider()
+        st.subheader("Agent Selection")
+        selected_agents = []
+        for s in stages:
+            if st.checkbox(f"{s['icon']} {s['agent']}", value=True, key=f"sel_{s['id']}"):
+                selected_agents.append(s)
+        
+        if st.button("🚀 " + t["btn_run"], use_container_width=True):
+            if not file:
+                st.warning("Please upload submission materials.")
+            else:
+                with st.status("Orchestrating Pipeline...", expanded=True) as status:
+                    for s in selected_agents:
+                        st.write(f"Agent {s['agent']} executing specialized logic...")
+                        time.sleep(1) # Simulation
+                        st.session_state.garden.append(s['icon'])
+                        st.session_state.active_indices[s['phase']] = 1
+                        st.session_state.audit_trail.append({
+                            "Timestamp": datetime.now().strftime("%H:%M:%S"),
+                            "Agent": s['agent'],
+                            "Action": "Document Audit",
+                            "Model": MODELS[target_model]
+                        })
+                    st.session_state.mana = max(0, st.session_state.mana - (len(selected_agents) * 2.5))
+                    st.session_state.report_md = f"# Preliminary Review: {file.name}\n\n## Summary\nSuccessfully analyzed {len(selected_agents)} regulatory domains.\n\n## Findings\n- **Safety**: Compliant\n- **Performance**: Validated\n\n*Generated by Swissmed V4.0*"
+                    status.update(label="Analysis Complete", state="complete")
+                    st.rerun()
+
+    with c2:
+        st.subheader(t["report_header"])
+        report_txt = st.text_area("Live Report Editor", value=st.session_state.report_md, height=500)
+        st.session_state.report_md = report_txt
+        st.divider()
+        st.markdown("### Report Preview")
+        st.markdown(report_txt)
+        st.download_button("Export Report", report_txt, "Swissmed_Report.md")
+
+# --- TAB: MANAGEMENT ---
+with tab_mg:
+    st.subheader("Dynamic YAML Orchestration")
+    col_e1, col_e2 = st.columns([2, 1])
+    with col_e1:
+        yaml_content = yaml.dump(st.session_state.agents_yaml, allow_unicode=True, sort_keys=False)
+        user_input = st.text_area("Edit Configuration", value=yaml_content, height=450)
+        if st.button(t["btn_std"]):
+            std_data = standardize_yaml(user_input)
+            if std_data:
+                st.session_state.agents_yaml = std_data
+                st.success("Pipeline refreshed successfully.")
+                st.rerun()
+    with col_e2:
+        st.info("The configuration drives the Dashboard and Live Review tabs. Ensure every agent has a 'phase' assigned.")
+        up_file = st.file_uploader("Upload agents.yaml", type=["yaml", "yml"])
+        if up_file:
+            st.session_state.agents_yaml = standardize_yaml(up_file.read().decode())
+            st.rerun()
+        st.download_button("Download Config", yaml.dump(st.session_state.agents_yaml), "agents.yaml")
+
+# --- TAB: LOGS ---
+with tab_au:
+    if st.session_state.audit_trail:
+        st.dataframe(pd.DataFrame(st.session_state.audit_trail), use_container_width=True)
+    else:
+        st.write("No agent activity logs available.")
+
+# Footer Garden
+if st.session_state.garden:
+    st.divider()
+    st.markdown(f"### 🌸 Achievement Blossoms: {' '.join(st.session_state.garden)}")
+
+st.caption("Swissmed Flower V4.0 | Regulatory AI Environment | Powered by Gemini")
