@@ -1,3 +1,7 @@
+import os
+# Fix for Protobuf TypeError: Descriptors cannot be created directly
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+
 import streamlit as st
 import yaml
 import json
