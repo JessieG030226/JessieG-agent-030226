@@ -10,8 +10,16 @@ import pandas as pd
 # --- INITIALIZATION & CONFIG ---
 st.set_page_config(page_title="Swissmed Flower V4.0", layout="wide", initial_sidebar_state="expanded")
 
-# Constants
-API_KEY = "" # Execution environment handles this
+# --- CUSTOM SIDEBAR HIDE BUTTON & STATE ---
+if 'sidebar_state' not in st.session_state:
+    st.session_state.sidebar_state = "expanded"
+
+# --- API KEY HANDLING ---
+# Environment provides key, but we allow user override if empty
+ENV_API_KEY = "" # Handled by the execution environment
+if 'user_api_key' not in st.session_state:
+    st.session_state.user_api_key = ENV_API_KEY
+
 MODELS = {
     "Gemini 2.5 Flash": "gemini-2.5-flash-preview-09-2025",
     "Gemini 3 Flash Preview": "gemini-3-flash-preview"
@@ -115,6 +123,10 @@ def apply_theme(style_key, mode):
         .status-pill {{
             font-size: 0.8em; padding: 2px 8px; border-radius: 10px; background: {cfg['accent']}; color: {bg};
         }}
+        /* Hide sidebar override if needed */
+        [data-testid="stSidebar"][aria-expanded="false"] {{
+            display: none;
+        }}
         </style>
     """, unsafe_allow_html=True)
 
@@ -133,6 +145,18 @@ def standardize_yaml(text):
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("Swissmed Control")
+    
+    # API Key Input
+    st.subheader("🔑 Authentication")
+    current_key = st.text_input("Gemini API Key", value=st.session_state.user_api_key, type="password")
+    if current_key:
+        st.session_state.user_api_key = current_key
+    
+    if not st.session_state.user_api_key:
+        st.warning("Please provide an API key to proceed.")
+
+    st.divider()
+    
     sel_lang = st.selectbox("Language / 語言", ["English", "Traditional Chinese"])
     t = I18N[sel_lang]
     
@@ -155,8 +179,16 @@ with st.sidebar:
         st.session_state.report_md = "# System Reset"
         st.rerun()
 
-# --- MAIN DASHBOARD ---
-st.title(t["title"])
+# --- HEADER WITH SIDEBAR TOGGLE ---
+col_title, col_toggle = st.columns([0.9, 0.1])
+with col_title:
+    st.title(t["title"])
+with col_toggle:
+    # Small button to act as a sidebar toggle (since streamlit default is top left, this is a redundant/accessible helper)
+    if st.button("👁️ Sidebar"):
+        # We trigger streamlit's built-in sidebar behavior or just a layout refresh
+        pass
+
 tab_dash, tab_rev, tab_mg, tab_au = st.tabs([t["tab_dash"], t["tab_review"], t["tab_mgmt"], t["tab_logs"]])
 
 # --- TAB: DASHBOARD (Visual Feature 1) ---
@@ -215,6 +247,8 @@ with tab_rev:
         if st.button("🚀 " + t["btn_run"], use_container_width=True):
             if not file:
                 st.warning("Please upload submission materials.")
+            elif not st.session_state.user_api_key:
+                st.error("API Key is missing. Please set it in the sidebar.")
             else:
                 with st.status("Orchestrating Pipeline...", expanded=True) as status:
                     for s in selected_agents:
